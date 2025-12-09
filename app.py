@@ -1,140 +1,149 @@
 import streamlit as st
-import os
 import re
-import asyncio
-import edge_tts
-from pydub import AudioSegment
-from pydub.effects import speedup
-import tempfile
-import zipfile
+from datetime import datetime, timedelta
+import requests
 import io
+from pydub import AudioSegment, effects
 
-# ==========================================
-# 1. 설정 및 언어 매핑
-# ==========================================
-st.set_page_config(page_title="AI 자동 더빙 생성기", page_icon="🎙️")
+# --- 1. 기본 설정 및 함수 정의 ---
 
-VOICE_MAPPING = {
-    "ko": "ko-KR-SunHiNeural",
-    "en": "en-US-ChristopherNeural",
-    "es": "es-ES-AlvaroNeural",
-    "fr": "fr-FR-DeniseNeural",
-    "de": "de-DE-KillianNeural",
-    "ja": "ja-JP-NanamiNeural",
-    "zh": "zh-CN-XiaoxiaoNeural",
-    # 필요한 언어 추가
-}
-DEFAULT_VOICE = "en-US-ChristopherNeural"
+def parse_srt_time(time_str):
+    """SRT 시간 문자열(00:00:00,000)을 밀리초(ms)로 변환"""
+    time_str = time_str.replace(',', '.')
+    t = datetime.strptime(time_str, "%H:%M:%S.%f")
+    delta = timedelta(hours=t.hour, minutes=t.minute, seconds=t.second, microseconds=t.microsecond)
+    return delta.total_seconds() * 1000
 
-# ==========================================
-# 2. 핵심 로직 함수들
-# ==========================================
-def parse_sbv_time(time_str):
-    h, m, s = time_str.split(':')
-    s, ms = s.split('.')
-    return (int(h) * 3600000) + (int(m) * 60000) + (int(s) * 1000) + int(ms)
-
-def parse_sbv_content(content):
-    pattern = re.compile(r'(\d+:\d+:\d+\.\d+),(\d+:\d+:\d+\.\d+)\n(.+?)(?=\n\n|$)', re.DOTALL)
-    matches = pattern.findall(content)
+def parse_srt(srt_content):
+    """SRT 내용을 파싱하여 (시작시간, 종료시간, 텍스트) 리스트로 반환"""
+    pattern = re.compile(r'(\d+)\n(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})\n((?:(?!\d+\n).)*)', re.DOTALL)
+    matches = pattern.findall(srt_content)
+    
     parsed_data = []
-    for start, end, text in matches:
-        start_ms = parse_sbv_time(start)
-        end_ms = parse_sbv_time(end)
+    for idx, start, end, text in matches:
+        start_ms = parse_srt_time(start)
+        end_ms = parse_srt_time(end)
+        duration_ms = end_ms - start_ms
+        clean_text = text.strip().replace('\n', ' ')
         parsed_data.append({
-            'start': start_ms,
-            'end': end_ms,
-            'duration': end_ms - start_ms,
-            'text': text.replace('\n', ' ').strip()
+            'start_ms': start_ms,
+            'end_ms': end_ms,
+            'duration_ms': duration_ms,
+            'text': clean_text
         })
     return parsed_data
 
-def fit_audio_to_duration(audio_seg, max_duration_ms):
-    current_duration = len(audio_seg)
-    if current_duration <= max_duration_ms:
-        return audio_seg
-    speed_factor = current_duration / max_duration_ms
-    # 속도 조절 (pydub speedup 활용)
-    new_sample_rate = int(audio_seg.frame_rate * speed_factor)
-    fast_audio = audio_seg._spawn(audio_seg.raw_data, overrides={'frame_rate': new_sample_rate})
-    return fast_audio.set_frame_rate(audio_seg.frame_rate)
+def generate_audio(text, voice_id, api_key):
+    """ElevenLabs API 호출"""
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+    headers = {
+        "xi-api-key": api_key,
+        "Content-Type": "application/json"
+    }
+    data = {
+        "text": text,
+        "model_id": "eleven_multilingual_v2", # 모델 변경 가능
+        "voice_settings": {
+            "stability": 0.5,
+            "similarity_boost": 0.75
+        }
+    }
+    response = requests.post(url, json=data, headers=headers)
+    if response.status_code == 200:
+        return response.content
+    else:
+        st.error(f"API Error: {response.text}")
+        return None
 
-async def generate_audio_for_file(sbv_content, filename):
-    lang_code = filename.split('.')[0]
-    voice = VOICE_MAPPING.get(lang_code, DEFAULT_VOICE)
+def match_target_duration(audio_segment, target_duration_ms):
+    """오디오 길이를 타임코드 길이에 맞춤 (속도 조절 or 무음 추가)"""
+    current_duration_ms = len(audio_segment)
     
-    subtitles = parse_sbv_content(sbv_content)
-    final_audio = AudioSegment.empty()
-    current_cursor = 0
+    if current_duration_ms == 0:
+        return AudioSegment.silent(duration=target_duration_ms)
 
-    # 진행률 표시줄
-    progress_bar = st.progress(0)
-    total_lines = len(subtitles)
-
-    for i, sub in enumerate(subtitles):
-        text = sub['text']
-        if not text: continue
-
-        # TTS 생성 (메모리 내에서 처리)
-        communicate = edge_tts.Communicate(text, voice)
-        mp3_fp = io.BytesIO()
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                mp3_fp.write(chunk["data"])
+    # 1. 오디오가 타임코드보다 길 때 -> 속도를 높임 (Speed Up)
+    if current_duration_ms > target_duration_ms:
+        speed_factor = current_duration_ms / target_duration_ms
+        # 속도가 너무 빨라지면(예: 1.5배 이상) 음질이 깨지므로 경고 필요
+        # pydub의 speedup은 간단한 구현이므로 퀄리티가 중요하면 전문 DSP 라이브러리 필요
+        # 여기서는 단순히 프레임 속도를 조절하여 길이를 맞춥니다 (피치 변화 최소화 로직 적용 필요)
         
-        mp3_fp.seek(0)
-        segment = AudioSegment.from_mp3(mp3_fp)
+        # 간단한 방식: speedup 사용 (약간의 아티팩트 발생 가능)
+        refined_audio = audio_segment.speedup(playback_speed=speed_factor)
         
-        # 길이 맞추기
-        processed_segment = fit_audio_to_duration(segment, sub['duration'])
+        # speedup 후 미세한 오차가 있을 수 있으므로 잘라내거나 늘려서 정확히 맞춤
+        if len(refined_audio) > target_duration_ms:
+            refined_audio = refined_audio[:int(target_duration_ms)]
+            
+    # 2. 오디오가 타임코드보다 짧을 때 -> 뒤에 무음 추가 (Add Silence)
+    else:
+        silence_duration = target_duration_ms - current_duration_ms
+        silence = AudioSegment.silent(duration=silence_duration)
+        refined_audio = audio_segment + silence
         
-        # 싱크 맞추기 (무음 추가)
-        silence_gap = sub['start'] - current_cursor
-        if silence_gap > 0:
-            final_audio += AudioSegment.silent(duration=silence_gap)
-        
-        final_audio += processed_segment
-        current_cursor = sub['start'] + len(processed_segment)
-        
-        # 진행률 업데이트
-        progress_bar.progress((i + 1) / total_lines)
+    return refined_audio
 
-    progress_bar.empty() # 완료 후 바 숨김
-    
-    # 결과 WAV를 메모리에 저장
-    out_wav = io.BytesIO()
-    final_audio.export(out_wav, format="wav")
-    out_wav.seek(0)
-    return out_wav
+# --- 2. Streamlit 웹 앱 UI 구성 ---
 
-# ==========================================
-# 3. 웹 앱 UI 구성
-# ==========================================
-st.title("🎙️ 다국어 자동 더빙 생성기")
-st.write("YouTube .sbv 자막 파일을 업로드하면, 타임코드에 딱 맞는 더빙 오디오(.wav)를 만들어줍니다.")
+st.title("🎙️ AI Dubbing Sync Tool")
+st.markdown("SRT 파일을 업로드하면 타임코드에 딱 맞는 더빙 오디오를 생성합니다.")
 
-uploaded_files = st.file_uploader("SBV 파일들을 드래그해서 넣으세요 (여러 개 가능)", 
-                                  type=["sbv"], accept_multiple_files=True)
+# 사이드바: 설정
+with st.sidebar:
+    st.header("설정 (Settings)")
+    api_key = st.text_input("ElevenLabs API Key", type="password")
+    voice_id = st.text_input("Voice ID", value="21m00Tcm4TlvDq8ikWAM") # 기본값: Rachel
+    st.info("💡 Tip: 영어 원문을 20% 정도 짧게 압축해야 자연스럽습니다.")
 
-if uploaded_files:
-    if st.button("오디오 생성 시작!"):
-        zip_buffer = io.BytesIO()
+# 메인: 파일 업로드
+uploaded_file = st.file_uploader("SRT 파일을 업로드하세요", type=["srt"])
+
+if uploaded_file and api_key:
+    if st.button("오디오 생성 시작 (Generate Audio)"):
+        srt_content = uploaded_file.getvalue().decode("utf-8")
+        parsed_segments = parse_srt(srt_content)
         
-        with zipfile.ZipFile(zip_buffer, "w") as zf:
-            for uploaded_file in uploaded_files:
-                filename = uploaded_file.name
-                st.write(f"🔄 처리 중: **{filename}**...")
+        st.write(f"총 {len(parsed_segments)}개의 문장을 처리합니다...")
+        
+        # 진행률 바
+        progress_bar = st.progress(0)
+        
+        # 전체 오디오 트랙 초기화 (마지막 타임코드까지 채우기 위함)
+        total_duration = parsed_segments[-1]['end_ms']
+        final_audio = AudioSegment.silent(duration=total_duration + 1000) # 여유 있게 생성
+        
+        # 개별 세그먼트 처리
+        for i, seg in enumerate(parsed_segments):
+            # 1. 오디오 생성
+            audio_data = generate_audio(seg['text'], voice_id, api_key)
+            
+            if audio_data:
+                # 2. 오디오 처리 (pydub)
+                segment_audio = AudioSegment.from_file(io.BytesIO(audio_data), format="mp3")
                 
-                # 파일 내용 읽기
-                stringio = io.StringIO(uploaded_file.getvalue().decode("utf-8"))
-                sbv_content = stringio.read()
+                # 3. 싱크 맞추기 (Time Stretch)
+                synced_audio = match_target_duration(segment_audio, seg['duration_ms'])
                 
-                # 비동기 로직 실행
-                wav_data = asyncio.run(generate_audio_for_file(sbv_content, filename))
-                
-                # 압축 파일에 추가
-                output_filename = filename.replace('.sbv', '.wav')
-                zf.writestr(output_filename, wav_data.getvalue())
-                st.success(f"✅ 완료: {filename}")
+                # 4. 전체 트랙의 정확한 위치(Start Time)에 덮어쓰기(Overlay)
+                # 주의: 단순히 이어붙이는 게 아니라, 타임코드의 '시작 위치'에 배치해야 함
+                final_audio = final_audio.overlay(synced_audio, position=int(seg['start_ms']))
+            
+            # 진행률 업데이트
+            progress_bar.progress((i + 1) / len(parsed_segments))
+            
+        st.success("완료되었습니다! 아래 버튼을 눌러 다운로드하세요.")
         
-        zip_buffer.seek(0)
+        # 다운로드 버튼 생성
+        buffer = io.BytesIO()
+        final_audio.export(buffer, format="mp3")
+        st.audio(buffer, format="audio/mp3")
+        st.download_button(
+            label="더빙 오디오 다운로드 (.mp3)",
+            data=buffer,
+            file_name="dubbed_output.mp3",
+            mime="audio/mp3"
+        )
+
+elif not api_key:
+    st.warning("왼쪽 사이드바에 API Key를 입력해주세요.")
