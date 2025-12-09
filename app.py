@@ -57,18 +57,55 @@ def generate_audio(text, voice_id, api_key):
         st.error(f"API Error: {response.text}")
         return None
 
+# [수정됨] 무음 제거 함수 추가 (오디오 앞뒤의 조용한 부분을 잘라냄)
+def remove_silence(audio_segment, silence_thresh=-50.0):
+    start_trim = 0
+    end_trim = len(audio_segment)
+    
+    # 앞부분 무음 찾기
+    for i in range(0, len(audio_segment), 10):
+        if audio_segment[i:i+10].dBFS > silence_thresh:
+            start_trim = i
+            break
+            
+    # 뒷부분 무음 찾기
+    for i in range(len(audio_segment)-10, 0, -10):
+        if audio_segment[i:i+10].dBFS > silence_thresh:
+            end_trim = i + 10
+            break
+            
+    return audio_segment[start_trim:end_trim]
+
+# [수정됨] 타임코드 매칭 함수 (안전장치 강화)
 def match_target_duration(audio_segment, target_duration_ms):
-    """오디오 길이를 타임코드 길이에 맞춤"""
+    
+    # 1. 먼저 앞뒤 무음을 제거해서 순수 오디오만 남김 (압축 부담 줄이기)
+    if len(audio_segment) > 0:
+        audio_segment = remove_silence(audio_segment)
+
     current_duration_ms = len(audio_segment)
     
     if current_duration_ms == 0:
         return AudioSegment.silent(duration=target_duration_ms)
 
+    # 오디오가 타임코드보다 길 때 -> 속도를 높임 (Speed Up)
     if current_duration_ms > target_duration_ms:
         speed_factor = current_duration_ms / target_duration_ms
-        refined_audio = audio_segment.speedup(playback_speed=speed_factor)
+        
+        # [안전장치] 속도 변환 시도 (실패 시 원본 사용)
+        try:
+            # 1.5배 이상 빨라져야 하면 음질이 깨질 수 있으므로 로그를 남기거나 주의 필요
+            # pydub speedup은 1.4배 넘어가면 불안정할 수 있음
+            refined_audio = audio_segment.speedup(playback_speed=speed_factor)
+        except Exception as e:
+            # 변환 실패시 그냥 원본을 씀 (묵음 방지)
+            refined_audio = audio_segment
+
+        # 변환 후에도 길거나, 변환이 제대로 안 됐을 경우 강제로 자름
         if len(refined_audio) > target_duration_ms:
             refined_audio = refined_audio[:int(target_duration_ms)]
+            
+    # 오디오가 타임코드보다 짧을 때 -> 뒤에 무음 추가 (Add Silence)
     else:
         silence_duration = target_duration_ms - current_duration_ms
         silence = AudioSegment.silent(duration=silence_duration)
@@ -106,14 +143,13 @@ st.warning("SRT 파일을 업로드하세요. 반드시 '완료' 문구가 뜰 �
 
 uploaded_files = st.file_uploader("아래 영역에 파일을 드래그하거나 클릭하세요", type=["srt"], accept_multiple_files=True)
 
-# [핵심 변경 1] 세션 스테이트 초기화 (결과 저장소 만들기)
+# 세션 스테이트 초기화 (결과 저장소)
 if 'generated_results' not in st.session_state:
     st.session_state.generated_results = []
 
 if uploaded_files and api_key:
     if st.button(f"총 {len(uploaded_files)}개 파일 변환 시작 (Start Batch Process)"):
         
-        # 새로운 작업을 시작하므로 기존 결과 초기화
         st.session_state.generated_results = []
         
         main_progress = st.progress(0)
@@ -140,19 +176,20 @@ if uploaded_files and api_key:
                 
                 if audio_data:
                     segment_audio = AudioSegment.from_file(io.BytesIO(audio_data), format="mp3")
+                    # 싱크 맞추기 (수정된 함수 사용)
                     synced_audio = match_target_duration(segment_audio, seg['duration_ms'])
                     final_audio = final_audio.overlay(synced_audio, position=int(seg['start_ms']))
                 
                 sub_progress.progress((i + 1) / len(parsed_segments))
             
-            # [핵심 변경 2] 결과를 바로 보여주지 않고 세션에 저장
+            # 결과 저장
             output_filename = file_name.replace(".srt", "_dubbed.mp3")
             buffer = io.BytesIO()
             final_audio.export(buffer, format="mp3")
             
             st.session_state.generated_results.append({
                 "filename": output_filename,
-                "data": buffer.getvalue() # 바이너리 데이터로 저장
+                "data": buffer.getvalue()
             })
             
             st.divider()
@@ -160,7 +197,7 @@ if uploaded_files and api_key:
 
         status_text.success("🎉 모든 파일 처리가 완료되었습니다! 아래에서 다운로드하세요.")
 
-# [핵심 변경 3] 저장된 결과가 있으면 화면에 버튼 표시 (새로고침 되어도 유지됨)
+# 저장된 결과 표시
 if st.session_state.generated_results:
     st.markdown("### 📥 완료된 파일 다운로드")
     for result in st.session_state.generated_results:
