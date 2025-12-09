@@ -81,14 +81,22 @@ def match_target_duration(audio_segment, target_duration_ms):
 st.set_page_config(page_title="다국어 더빙용 일레븐랩스", page_icon="🎙️")
 st.title("🎙️ 다국어 더빙용 일레븐랩스")
 
-# [수정됨] 권장 개수 문구 변경 (3~5개 -> 2개)
-st.markdown("여러 개의 SRT 파일을 업로드하면 순차적으로 더빙 오디오를 생성합니다. (한번에 2개 권장)")
+# [요청 4] 일반 텍스트를 '경고 박스(노란색)' 디자인으로 변경
+st.warning("여러 개의 SRT 파일을 업로드하면 순차적으로 더빙 오디오를 생성합니다. (한번에 2개 권장)")
 
 st.warning("⚠ 더빙 생성을 신중하게 결정하세요. (버튼을 누르면 즉시 비용이 차감됩니다.)")
 
 with st.sidebar:
     st.header("설정 (Settings)")
     
+    # [요청 3] Voice ID 문구 수정
+    voice_id = st.text_input("더빙 캐릭터의 Voice ID 입력", value="21m00Tcm4TlvDq8ikWAM")
+    st.error("⚠ 목소리 캐릭터를 신중하게 입력하세요. (잘못된 ID를 입력해도 비용이 발생할 수 있습니다.)")
+    
+    st.info("💡 Tip: 영어 원문을 20% 정도 짧게 압축해야 자연스럽습니다.")
+
+    # [요청 2] API Key 박스 위치를 Tip 박스 아래로 이동
+    st.divider() # 구분선 추가 (깔끔하게 보이기 위해)
     if "ELEVENLABS_API_KEY" in st.secrets:
         api_key = st.secrets["ELEVENLABS_API_KEY"]
         st.success("✅ API Key가 안전하게 로드되었습니다.")
@@ -96,13 +104,8 @@ with st.sidebar:
         api_key = st.text_input("ElevenLabs API Key", type="password")
         st.warning("Secrets에 키를 등록하면 매번 입력하지 않아도 됩니다.")
 
-    voice_id = st.text_input("Voice ID", value="21m00Tcm4TlvDq8ikWAM")
-    st.error("⚠ 목소리 캐릭터를 신중하게 입력하세요. (잘못된 ID를 입력해도 비용이 발생할 수 있습니다.)")
-    
-    st.info("💡 Tip: 영어 원문을 20% 정도 짧게 압축해야 자연스럽습니다.")
-
-# [수정됨] 업로더 문구 변경 (여러 개 가능 -> 삭제)
-uploaded_files = st.file_uploader("SRT 파일을 업로드하세요", type=["srt"], accept_multiple_files=True)
+# [요청 1] 파일 업로더 문구 수정
+uploaded_files = st.file_uploader("SRT 파일을 업로드하세요. 반드시 '완료' 문구가 뜰 때까지 기다리세요.", type=["srt"], accept_multiple_files=True)
 
 if uploaded_files and api_key:
     if st.button(f"총 {len(uploaded_files)}개 파일 변환 시작 (Start Batch Process)"):
