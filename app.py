@@ -110,7 +110,6 @@ st.warning("⚠ 더빙 생성을 신중하게 결정하세요. (버튼을 누르
 with st.sidebar:
     st.header("설정 (Settings)")
     
-    # [수정 1 & 2] 글자 크기 키움 (Markdown 사용) & 입력창 빈칸으로 설정 (value="")
     st.markdown("### 더빙 캐릭터의 Voice ID 입력")
     voice_id = st.text_input("voice_id_label", value="", label_visibility="collapsed")
     
@@ -136,10 +135,9 @@ if 'generated_results' not in st.session_state:
 if uploaded_files and api_key:
     if st.button(f"총 {len(uploaded_files)}개 파일 변환 시작 (Start Batch Process)"):
         
-        # [수정 3] Voice ID가 비어있으면 경고를 띄우고 실행 중단
         if not voice_id.strip():
             st.error("🚨 Voice ID를 입력하세요! (사이드바를 확인해주세요)")
-            st.stop() # 여기서 코드 실행을 멈춥니다
+            st.stop()
 
         st.session_state.generated_results = []
         
@@ -189,7 +187,8 @@ if uploaded_files and api_key:
 if st.session_state.generated_results:
     st.markdown("### 📥 완료된 파일 다운로드")
     for result in st.session_state.generated_results:
-        col1, col2 = st.columns([1, 2])
+        # [수정된 부분] 비율 변경: 오디오(3) : 버튼(1) -> 오디오 바가 훨씬 길어집니다.
+        col1, col2 = st.columns([3, 1]) 
         with col1:
             st.audio(result["data"], format="audio/mp3")
         with col2:
@@ -197,7 +196,8 @@ if st.session_state.generated_results:
                 label=f"📥 {result['filename']} 다운로드",
                 data=result["data"],
                 file_name=result["filename"],
-                mime="audio/mp3"
+                mime="audio/mp3",
+                use_container_width=True # 버튼도 꽉 차게 보기 좋게 수정
             )
         st.divider()
 
