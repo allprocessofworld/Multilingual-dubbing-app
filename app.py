@@ -57,18 +57,15 @@ def generate_audio(text, voice_id, api_key):
         st.error(f"API Error: {response.text}")
         return None
 
-# [수정됨] 무음 제거 함수 추가 (오디오 앞뒤의 조용한 부분을 잘라냄)
 def remove_silence(audio_segment, silence_thresh=-50.0):
     start_trim = 0
     end_trim = len(audio_segment)
     
-    # 앞부분 무음 찾기
     for i in range(0, len(audio_segment), 10):
         if audio_segment[i:i+10].dBFS > silence_thresh:
             start_trim = i
             break
             
-    # 뒷부분 무음 찾기
     for i in range(len(audio_segment)-10, 0, -10):
         if audio_segment[i:i+10].dBFS > silence_thresh:
             end_trim = i + 10
@@ -76,10 +73,7 @@ def remove_silence(audio_segment, silence_thresh=-50.0):
             
     return audio_segment[start_trim:end_trim]
 
-# [수정됨] 타임코드 매칭 함수 (안전장치 강화)
 def match_target_duration(audio_segment, target_duration_ms):
-    
-    # 1. 먼저 앞뒤 무음을 제거해서 순수 오디오만 남김 (압축 부담 줄이기)
     if len(audio_segment) > 0:
         audio_segment = remove_silence(audio_segment)
 
@@ -88,24 +82,16 @@ def match_target_duration(audio_segment, target_duration_ms):
     if current_duration_ms == 0:
         return AudioSegment.silent(duration=target_duration_ms)
 
-    # 오디오가 타임코드보다 길 때 -> 속도를 높임 (Speed Up)
     if current_duration_ms > target_duration_ms:
         speed_factor = current_duration_ms / target_duration_ms
-        
-        # [안전장치] 속도 변환 시도 (실패 시 원본 사용)
         try:
-            # 1.5배 이상 빨라져야 하면 음질이 깨질 수 있으므로 로그를 남기거나 주의 필요
-            # pydub speedup은 1.4배 넘어가면 불안정할 수 있음
             refined_audio = audio_segment.speedup(playback_speed=speed_factor)
-        except Exception as e:
-            # 변환 실패시 그냥 원본을 씀 (묵음 방지)
+        except Exception:
             refined_audio = audio_segment
 
-        # 변환 후에도 길거나, 변환이 제대로 안 됐을 경우 강제로 자름
         if len(refined_audio) > target_duration_ms:
             refined_audio = refined_audio[:int(target_duration_ms)]
             
-    # 오디오가 타임코드보다 짧을 때 -> 뒤에 무음 추가 (Add Silence)
     else:
         silence_duration = target_duration_ms - current_duration_ms
         silence = AudioSegment.silent(duration=silence_duration)
@@ -118,14 +104,16 @@ def match_target_duration(audio_segment, target_duration_ms):
 st.set_page_config(page_title="다국어 더빙용 일레븐랩스", page_icon="🎙️")
 st.title("🎙️ 다국어 더빙용 일레븐랩스")
 
-# 상단 안내 문구들
 st.warning("여러 개의 SRT 파일을 업로드하면 순차적으로 더빙 오디오를 생성합니다. (한번에 2개 권장)")
 st.warning("⚠ 더빙 생성을 신중하게 결정하세요. (버튼을 누르면 즉시 비용이 차감됩니다.)")
 
 with st.sidebar:
     st.header("설정 (Settings)")
     
-    voice_id = st.text_input("더빙 캐릭터의 Voice ID 입력", value="21m00Tcm4TlvDq8ikWAM")
+    # [수정 1 & 2] 글자 크기 키움 (Markdown 사용) & 입력창 빈칸으로 설정 (value="")
+    st.markdown("### 더빙 캐릭터의 Voice ID 입력")
+    voice_id = st.text_input("voice_id_label", value="", label_visibility="collapsed")
+    
     st.error("⚠ 목소리 캐릭터를 신중하게 입력하세요. (잘못된 ID를 입력해도 비용이 발생할 수 있습니다.)")
     
     st.info("💡 Tip: 영어 원문을 20% 정도 짧게 압축해야 자연스럽습니다.")
@@ -138,18 +126,21 @@ with st.sidebar:
         api_key = st.text_input("ElevenLabs API Key", type="password")
         st.warning("Secrets에 키를 등록하면 매번 입력하지 않아도 됩니다.")
 
-# 경고 박스로 안내
 st.warning("SRT 파일을 업로드하세요. 반드시 '완료' 문구가 뜰 때까지 기다리세요.")
 
 uploaded_files = st.file_uploader("아래 영역에 파일을 드래그하거나 클릭하세요", type=["srt"], accept_multiple_files=True)
 
-# 세션 스테이트 초기화 (결과 저장소)
 if 'generated_results' not in st.session_state:
     st.session_state.generated_results = []
 
 if uploaded_files and api_key:
     if st.button(f"총 {len(uploaded_files)}개 파일 변환 시작 (Start Batch Process)"):
         
+        # [수정 3] Voice ID가 비어있으면 경고를 띄우고 실행 중단
+        if not voice_id.strip():
+            st.error("🚨 Voice ID를 입력하세요! (사이드바를 확인해주세요)")
+            st.stop() # 여기서 코드 실행을 멈춥니다
+
         st.session_state.generated_results = []
         
         main_progress = st.progress(0)
@@ -176,13 +167,11 @@ if uploaded_files and api_key:
                 
                 if audio_data:
                     segment_audio = AudioSegment.from_file(io.BytesIO(audio_data), format="mp3")
-                    # 싱크 맞추기 (수정된 함수 사용)
                     synced_audio = match_target_duration(segment_audio, seg['duration_ms'])
                     final_audio = final_audio.overlay(synced_audio, position=int(seg['start_ms']))
                 
                 sub_progress.progress((i + 1) / len(parsed_segments))
             
-            # 결과 저장
             output_filename = file_name.replace(".srt", "_dubbed.mp3")
             buffer = io.BytesIO()
             final_audio.export(buffer, format="mp3")
@@ -197,7 +186,6 @@ if uploaded_files and api_key:
 
         status_text.success("🎉 모든 파일 처리가 완료되었습니다! 아래에서 다운로드하세요.")
 
-# 저장된 결과 표시
 if st.session_state.generated_results:
     st.markdown("### 📥 완료된 파일 다운로드")
     for result in st.session_state.generated_results:
