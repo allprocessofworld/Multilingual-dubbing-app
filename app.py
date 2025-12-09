@@ -81,22 +81,19 @@ def match_target_duration(audio_segment, target_duration_ms):
 st.set_page_config(page_title="다국어 더빙용 일레븐랩스", page_icon="🎙️")
 st.title("🎙️ 다국어 더빙용 일레븐랩스")
 
-# [요청 4] 일반 텍스트를 '경고 박스(노란색)' 디자인으로 변경
+# 상단 안내 문구들
 st.warning("여러 개의 SRT 파일을 업로드하면 순차적으로 더빙 오디오를 생성합니다. (한번에 2개 권장)")
-
 st.warning("⚠ 더빙 생성을 신중하게 결정하세요. (버튼을 누르면 즉시 비용이 차감됩니다.)")
 
 with st.sidebar:
     st.header("설정 (Settings)")
     
-    # [요청 3] Voice ID 문구 수정
     voice_id = st.text_input("더빙 캐릭터의 Voice ID 입력", value="21m00Tcm4TlvDq8ikWAM")
     st.error("⚠ 목소리 캐릭터를 신중하게 입력하세요. (잘못된 ID를 입력해도 비용이 발생할 수 있습니다.)")
     
     st.info("💡 Tip: 영어 원문을 20% 정도 짧게 압축해야 자연스럽습니다.")
 
-    # [요청 2] API Key 박스 위치를 Tip 박스 아래로 이동
-    st.divider() # 구분선 추가 (깔끔하게 보이기 위해)
+    st.divider() 
     if "ELEVENLABS_API_KEY" in st.secrets:
         api_key = st.secrets["ELEVENLABS_API_KEY"]
         st.success("✅ API Key가 안전하게 로드되었습니다.")
@@ -104,11 +101,20 @@ with st.sidebar:
         api_key = st.text_input("ElevenLabs API Key", type="password")
         st.warning("Secrets에 키를 등록하면 매번 입력하지 않아도 됩니다.")
 
-# [요청 1] 파일 업로더 문구 수정
-uploaded_files = st.file_uploader("SRT 파일을 업로드하세요. 반드시 '완료' 문구가 뜰 때까지 기다리세요.", type=["srt"], accept_multiple_files=True)
+# 경고 박스로 안내
+st.warning("SRT 파일을 업로드하세요. 반드시 '완료' 문구가 뜰 때까지 기다리세요.")
+
+uploaded_files = st.file_uploader("아래 영역에 파일을 드래그하거나 클릭하세요", type=["srt"], accept_multiple_files=True)
+
+# [핵심 변경 1] 세션 스테이트 초기화 (결과 저장소 만들기)
+if 'generated_results' not in st.session_state:
+    st.session_state.generated_results = []
 
 if uploaded_files and api_key:
     if st.button(f"총 {len(uploaded_files)}개 파일 변환 시작 (Start Batch Process)"):
+        
+        # 새로운 작업을 시작하므로 기존 결과 초기화
+        st.session_state.generated_results = []
         
         main_progress = st.progress(0)
         status_text = st.empty()
@@ -139,25 +145,36 @@ if uploaded_files and api_key:
                 
                 sub_progress.progress((i + 1) / len(parsed_segments))
             
+            # [핵심 변경 2] 결과를 바로 보여주지 않고 세션에 저장
             output_filename = file_name.replace(".srt", "_dubbed.mp3")
             buffer = io.BytesIO()
             final_audio.export(buffer, format="mp3")
             
-            col1, col2 = st.columns([1, 2])
-            with col1:
-                st.audio(buffer, format="audio/mp3")
-            with col2:
-                st.download_button(
-                    label=f"📥 {output_filename} 다운로드",
-                    data=buffer,
-                    file_name=output_filename,
-                    mime="audio/mp3",
-                    key=f"btn_{file_idx}"
-                )
+            st.session_state.generated_results.append({
+                "filename": output_filename,
+                "data": buffer.getvalue() # 바이너리 데이터로 저장
+            })
+            
             st.divider()
             main_progress.progress((file_idx + 1) / len(uploaded_files))
 
-        status_text.success("🎉 모든 파일 처리가 완료되었습니다!")
+        status_text.success("🎉 모든 파일 처리가 완료되었습니다! 아래에서 다운로드하세요.")
+
+# [핵심 변경 3] 저장된 결과가 있으면 화면에 버튼 표시 (새로고침 되어도 유지됨)
+if st.session_state.generated_results:
+    st.markdown("### 📥 완료된 파일 다운로드")
+    for result in st.session_state.generated_results:
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            st.audio(result["data"], format="audio/mp3")
+        with col2:
+            st.download_button(
+                label=f"📥 {result['filename']} 다운로드",
+                data=result["data"],
+                file_name=result["filename"],
+                mime="audio/mp3"
+            )
+        st.divider()
 
 elif not api_key:
     st.warning("왼쪽 사이드바에 API Key를 입력하거나 Secrets에 등록해주세요.")
