@@ -102,8 +102,16 @@ uploaded_file = st.file_uploader("SRT 파일을 업로드하세요", type=["srt"
 if uploaded_file and api_key:
     if st.button("오디오 생성 시작 (Generate Audio)"):
         srt_content = uploaded_file.getvalue().decode("utf-8")
-        parsed_segments = parse_srt(srt_content)
+        # ▼▼▼ [여기 아래에 이 코드를 추가해주세요] ▼▼▼
+        srt_content = srt_content.replace("\r\n", "\n") 
+        # ▲▲▲ 윈도우용 줄바꿈 문자를 맥/리눅스용으로 바꿔줍니다 ▲▲▲
         
+        parsed_segments = parse_srt(srt_content)
+
+        # ▼▼▼ [안전을 위해 이 코드도 추가하면 좋습니다] ▼▼▼
+        if not parsed_segments:
+            st.error("SRT 내용을 읽을 수 없습니다. 파일이 'UTF-8' 인코딩인지 확인해주세요.")
+            st.stop()
         st.write(f"총 {len(parsed_segments)}개의 문장을 처리합니다...")
         
         # 진행률 바
@@ -147,3 +155,4 @@ if uploaded_file and api_key:
 
 elif not api_key:
     st.warning("왼쪽 사이드바에 API Key를 입력해주세요.")
+
