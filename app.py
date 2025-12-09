@@ -80,7 +80,7 @@ def match_target_duration(audio_segment, target_duration_ms):
 
 st.set_page_config(page_title="다국어 더빙용 일레븐랩스", page_icon="🎙️")
 st.title("🎙️ 다국어 더빙용 일레븐랩스")
-st.markdown("여러 개의 SRT 파일을 업로드하면 순차적으로 더빙 오디오를 생성합니다.")
+st.markdown("여러 개의 SRT 파일을 업로드하면 순차적으로 더빙 오디오를 생성합니다.(한번에 3~5개 권장)")
 
 # [추가됨] 요청 2: 메인 화면 경고 문구
 st.warning("⚠ 더빙 생성을 신중하게 결정하세요. (버튼을 누르면 즉시 비용이 차감됩니다.)")
@@ -158,3 +158,4 @@ if uploaded_files and api_key:
 
 elif not api_key:
     st.warning("왼쪽 사이드바에 API Key를 입력하거나 Secrets에 등록해주세요.")
+
