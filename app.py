@@ -102,7 +102,7 @@ def match_target_duration(audio_segment, target_duration_ms):
 # --- 2. Streamlit 웹 앱 UI 구성 ---
 
 st.set_page_config(page_title="다국어 더빙용 일레븐랩스", page_icon="🎙️")
-st.title("🎙️ 다국어 더빙용 일레븐랩스")
+st.title("🎙️ 다국어 더빙용 일레븐랩스 (Vr.251210)")
 
 st.warning("여러 개의 SRT 파일을 업로드하면 순차적으로 더빙 오디오를 생성합니다. (한번에 2개 권장)")
 st.warning("⚠ 더빙 생성을 신중하게 결정하세요. (버튼을 누르면 즉시 비용이 차감됩니다.)")
@@ -203,3 +203,4 @@ if st.session_state.generated_results:
 
 elif not api_key:
     st.warning("왼쪽 사이드바에 API Key를 입력하거나 Secrets에 등록해주세요.")
+
